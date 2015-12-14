@@ -175,7 +175,8 @@ static struct hostapd_iface * hostapd_init(const char *config_file)
 		goto fail;
 	hapd_iface->conf = conf;
 	hapd_iface->num_bss = conf->num_bss;
-	wpa_printf(MSG_ERROR, "JJJ in hostapd_init()  hapd_iface->num_bss=%d JJJ ", hapd_iface->num_bss);
+	wpa_printf(MSG_DEBUG, "JJJ in hostapd_init()  hapd_iface->num_bss=%d JJJ ",
+							(int)hapd_iface->num_bss);
 	hapd_iface->bss = os_calloc(conf->num_bss,
 				    sizeof(struct hostapd_data *));
 	if (hapd_iface->bss == NULL)
@@ -391,7 +392,7 @@ static int hostapd_global_init(struct hapd_interfaces *interfaces,
 	for (i = 0; wpa_drivers[i]; i++)
 		global.drv_count++;
 	wpa_printf(MSG_ERROR, "JJJ in hostapd_global_init"
-				"global.drv_count=%d JJJ",global.drv_count);
+				"global.drv_count=%d JJJ",(int)global.drv_count);
 	if (global.drv_count == 0) {
 		wpa_printf(MSG_ERROR, "No drivers enabled");
 		return -1;
@@ -616,7 +617,7 @@ int main(int argc, char *argv[])
 
 	interfaces.count = argc - optind;
 	if (interfaces.count) {
-		wpa_printf(MSG_ERROR, " JJJ interfaces.count=%d JJJ ",interfaces.cout);
+		wpa_printf(MSG_ERROR, " JJJ interfaces.count=%d JJJ ",(int)interfaces.count);
 		interfaces.iface = os_calloc(interfaces.count,
 					     sizeof(struct hostapd_iface *));
 		if (interfaces.iface == NULL) {

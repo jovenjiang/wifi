@@ -37,6 +37,15 @@
 #include "wnm_ap.h"
 #include "ieee802_11.h"
 
+void mac_to_ascii(u8 *mac_ascii, const u8 *addr)
+{
+    char mac_str[MAC_ASCII_LEN + 1];
+    int i;
+
+    sprintf(mac_str, MACSTR, MAC2STR(addr));
+    for (i = 0; i< MAC_ASCII_LEN; i++)
+        mac_ascii[i] = (u8)mac_str[i];
+}
 
 u8 * hostapd_eid_supp_rates(struct hostapd_data *hapd, u8 *eid)
 {

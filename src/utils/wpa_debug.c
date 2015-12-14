@@ -610,8 +610,7 @@ void wpa_msg(void *ctx, int level, const char *fmt, ...)
 	if (wpa_msg_ifname_cb) {
 		const char *ifname = wpa_msg_ifname_cb(ctx);
 		if (ifname) {
-			wpa_printf(MSG_ERROR, " JJJ in wpa_msg(void *ctx, int level, const char *fmt, ...) "
-						   "ifname:JJJ ");
+
 			int res = os_snprintf(prefix, sizeof(prefix), "%s: ",
 					      ifname);
 			if (res < 0 || res >= (int) sizeof(prefix))

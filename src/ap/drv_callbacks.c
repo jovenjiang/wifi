@@ -10,6 +10,7 @@
 
 #include "utils/common.h"
 #include "radius/radius.h"
+#include "radius/radius_client.h"
 #include "drivers/driver.h"
 #include "common/ieee802_11_defs.h"
 #include "common/ieee802_11_common.h"
@@ -24,10 +25,12 @@
 #include "tkip_countermeasures.h"
 #include "ieee802_1x.h"
 #include "wpa_auth.h"
+#include "wpa_auth_glue.h"
 #include "wps_hostapd.h"
 #include "ap_drv_ops.h"
 #include "ap_config.h"
 #include "hw_features.h"
+/* add,make mac turn to str */
 
 
 int hostapd_notif_assoc(struct hostapd_data *hapd, const u8 *addr,
@@ -526,6 +529,7 @@ static void hostapd_action_rx(struct hostapd_data *hapd,
 
 #define HAPD_BROADCAST ((struct hostapd_data *) -1)
 
+/*
 static struct hostapd_data * get_hapd_bssid(struct hostapd_iface *iface,
 					    const u8 *bssid)
 {
@@ -544,20 +548,108 @@ static struct hostapd_data * get_hapd_bssid(struct hostapd_iface *iface,
 
 	return NULL;
 }
+  */
+static int hostapd_setup_bss_add(struct hostapd_iface *iface,const u8 *sa)
+{
+	u8 mac_ascii[MAC_ASCII_LEN];
+	struct hostapd_config *conf;
 
+	mac_to_ascii(mac_ascii, sa);
+
+	wpa_printf(MSG_DEBUG,"JJJ begin setup an ap"
+						" for station addr:" MACSTR "  JJJ", MAC2STR(sa));
+	iface->num_bss++;
+	iface->bss = (struct hostapd_data **)realloc(iface->bss,
+					iface->num_bss * sizeof(struct hostapd_data *));
+	conf = iface->interfaces->config_read_cb(iface->config_fname);
+	if(conf==NULL){
+		wpa_printf(MSG_ERROR, "JJJ configuration failed in setup bss add JJJ");
+		return -1;
+	}
+	conf->bss->ssid.ssid_len = MAC_ASCII_LEN;
+	os_memcpy(conf->bss->ssid.ssid, mac_ascii, MAC_ASCII_LEN);
+	/*
+	iface->interfaces->set_security_params(conf->bss);
+	*/
+	iface->bss[iface->num_bss - 1] = hostapd_alloc_bss_data(iface, conf,conf->bss);
+	iface->bss[iface->num_bss - 1]->msg_ctx = iface->bss[iface->num_bss - 1];
+	iface->bss[iface->num_bss - 1]->drv_priv = iface->bss[0]->drv_priv;
+	os_memcpy(iface->bss[iface->num_bss - 1]->own_addr, iface->bss[0]->own_addr, ETH_ALEN);
+	hostapd_setup_wpa(iface->bss[iface->num_bss - 1]);   /*hostapd_setup_bss*/
+	if (iface->bss[iface->num_bss - 1]->wpa_auth)
+		wpa_init_keys(iface->bss[iface->num_bss - 1]->wpa_auth);      /*hostapd_setup_bss*/
+
+	if(hostapd_setup_wpa_psk(iface->bss[iface->num_bss - 1]->conf))   /*hostapd_setup_bss*/
+	{
+		wpa_printf(MSG_ERROR, "JJJ WPA-PSK setup failed in setup bss add JJJ");
+		return -1;
+	}
+	iface->bss[iface->num_bss - 1]->radius = radius_client_init(iface->bss[iface->num_bss - 1],
+												iface->bss[iface->num_bss - 1]->conf->radius);
+																	/*hostapd_setup_bss*/
+	if (iface->bss[iface->num_bss - 1]->radius == NULL) {
+			wpa_printf(MSG_ERROR, "JJJ RADIUS client initialization failed"
+						"in setup bss add JJJ");
+			return -1;
+		}
+	wpa_printf(MSG_DEBUG,"JJJ num_bss: %d  JJJ", (int)iface->num_bss);
+	return 0;
+
+}
+
+static struct hostapd_data * get_hapd_bssid(struct hostapd_iface *iface,
+					    const u8 *bssid,const u8 *sa, const u16 fc)
+{
+	size_t i;
+	u8 mac_ascii[MAC_ASCII_LEN];
+
+	if (bssid == NULL)
+		return NULL;
+	if (bssid[0] == 0xff && bssid[1] == 0xff && bssid[2] == 0xff &&
+	    bssid[3] == 0xff && bssid[4] == 0xff && bssid[5] == 0xff)
+		return HAPD_BROADCAST;
+
+		/* all bssid is the same,equal to mac. */
+	if (os_memcmp(bssid, iface->bss[0]->own_addr, ETH_ALEN) != 0)
+		return NULL;
+
+	if (WLAN_FC_GET_TYPE(fc) == 3   /* unknow station */
+		|| (WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_MGMT
+		&& WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_PROBE_REQ) /* probe request */
+		|| (WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_MGMT
+		&& WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_PROBE_RESP)) /* probe response */
+			return iface->bss[0];					/*  don't setup for probe */
+
+	mac_to_ascii(mac_ascii, sa);
+	for (i = 0; i < iface->num_bss; i++) {
+		if (os_memcmp(mac_ascii, iface->bss[i]->conf->ssid.ssid, iface->bss[i]->conf->ssid.ssid_len) == 0)
+		{
+			wpa_printf(MSG_DEBUG,"JJJ find sta : " MACSTR " JJJ", MAC2STR(sa));
+			return iface->bss[i];
+		}
+	}
+		/* new station ,and try to authentication,setup an ap for it*/
+	if (WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_MGMT
+		&& WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_AUTH)
+	{
+		if(hostapd_setup_bss_add(iface,sa))
+			return NULL;
+	}
+	return iface->bss[iface->num_bss - 1];		/* end here means  exception happened */
+}
 
 static void hostapd_rx_from_unknown_sta(struct hostapd_data *hapd,
 					const u8 *bssid, const u8 *addr,
 					int wds)
 {
-	hapd = get_hapd_bssid(hapd->iface, bssid);
+	hapd = get_hapd_bssid(hapd->iface, bssid,addr,3<<2);   /* type 3 means unknown sta */
 	if (hapd == NULL || hapd == HAPD_BROADCAST)
 		return;
 
 	ieee802_11_rx_from_unknown(hapd, addr, wds);
 }
 
-
+/*
 static void hostapd_mgmt_rx(struct hostapd_data *hapd, struct rx_mgmt *rx_mgmt)
 {
 	struct hostapd_iface *iface = hapd->iface;
@@ -575,6 +667,49 @@ static void hostapd_mgmt_rx(struct hostapd_data *hapd, struct rx_mgmt *rx_mgmt)
 		u16 fc;
 		fc = le_to_host16(hdr->frame_control);
 
+		/*
+		 * Drop frames to unknown BSSIDs except for Beacon frames which
+		 * could be used to update neighbor information.*/
+/*
+		if (WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_MGMT &&
+		    WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_BEACON)
+			hapd = iface->bss[0];
+		else
+			return;
+	}
+
+	os_memset(&fi, 0, sizeof(fi));
+	fi.datarate = rx_mgmt->datarate;
+	fi.ssi_signal = rx_mgmt->ssi_signal;
+
+	if (hapd == HAPD_BROADCAST) {
+		size_t i;
+		for (i = 0; i < iface->num_bss; i++)
+			ieee802_11_mgmt(iface->bss[i], rx_mgmt->frame,
+					rx_mgmt->frame_len, &fi);
+	} else
+		ieee802_11_mgmt(hapd, rx_mgmt->frame, rx_mgmt->frame_len, &fi);
+
+	random_add_randomness(&fi, sizeof(fi));
+}
+*/
+
+static void hostapd_mgmt_rx(struct hostapd_data *hapd, struct rx_mgmt *rx_mgmt)
+{
+	struct hostapd_iface *iface = hapd->iface;
+	const struct ieee80211_hdr *hdr;
+	const u8 *bssid;
+	struct hostapd_frame_info fi;
+	u16 fc;
+
+	hdr = (const struct ieee80211_hdr *) rx_mgmt->frame;
+	bssid = get_hdr_bssid(hdr, rx_mgmt->frame_len);
+	if (bssid == NULL)
+		return;
+
+	fc = le_to_host16(hdr->frame_control);
+	hapd = get_hapd_bssid(iface, bssid, ((struct ieee80211_mgmt *)rx_mgmt->frame)->sa, fc);
+	if (hapd == NULL) {
 		/*
 		 * Drop frames to unknown BSSIDs except for Beacon frames which
 		 * could be used to update neighbor information.
@@ -641,7 +776,7 @@ static void hostapd_rx_action(struct hostapd_data *hapd,
 	os_free(buf);
 }
 
-
+/*
 static void hostapd_mgmt_tx_cb(struct hostapd_data *hapd, const u8 *buf,
 			       size_t len, u16 stype, int ok)
 {
@@ -651,6 +786,20 @@ static void hostapd_mgmt_tx_cb(struct hostapd_data *hapd, const u8 *buf,
 	if (hapd == NULL || hapd == HAPD_BROADCAST)
 		return;
 	ieee802_11_mgmt_cb(hapd, buf, len, stype, ok);
+}
+*/
+
+static void hostapd_mgmt_tx_cb(struct hostapd_data *hapd, const u8 *buf,
+			       size_t len, u16 type, int ok, const u8 *dst)
+{
+	struct ieee80211_hdr *hdr;
+	hdr = (struct ieee80211_hdr *) buf;
+	wpa_printf(MSG_DEBUG,"JJJ function hostapd_mgmt_tx_cb() for dst(addr): " MACSTR
+				" JJJ", MAC2STR(dst));
+	hapd = get_hapd_bssid(hapd->iface, get_hdr_bssid(hdr, len), dst, type);
+	if (hapd == NULL || hapd == HAPD_BROADCAST)
+		return;
+	ieee802_11_mgmt_cb(hapd, buf, len, WLAN_FC_GET_STYPE(type), ok);
 }
 
 #endif /* NEED_AP_MLME */
@@ -703,6 +852,7 @@ void wpa_supplicant_event(void *ctx, enum wpa_event_type event,
 	struct hostapd_data *hapd = ctx;
 #ifndef CONFIG_NO_STDOUT_DEBUG
 	int level = MSG_DEBUG;
+	u16 ty;
 
 	if (event == EVENT_RX_MGMT && data->rx_mgmt.frame &&
 	    data->rx_mgmt.frame_len >= 24) {
@@ -739,11 +889,23 @@ void wpa_supplicant_event(void *ctx, enum wpa_event_type event,
 #ifdef NEED_AP_MLME
 	case EVENT_TX_STATUS:
 		switch (data->tx_status.type) {
+		/* modyfied */
+		/*
 		case WLAN_FC_TYPE_MGMT:
 			hostapd_mgmt_tx_cb(hapd, data->tx_status.data,
 					   data->tx_status.data_len,
 					   data->tx_status.stype,
 					   data->tx_status.ack);
+			break;
+		*/
+
+		case WLAN_FC_TYPE_MGMT:
+			ty = (data->tx_status.type << 2) | (data->tx_status.stype << 4);
+			hostapd_mgmt_tx_cb(hapd, data->tx_status.data,
+					   data->tx_status.data_len,
+					   ty,
+					   data->tx_status.ack,
+					   data->tx_status.dst);
 			break;
 		case WLAN_FC_TYPE_DATA:
 			hostapd_tx_status(hapd, data->tx_status.dst,
