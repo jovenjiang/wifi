@@ -554,7 +554,7 @@ static int hostapd_setup_bss_add(struct hostapd_iface *iface,const u8 *sa)
 	u8 mac_ascii[MAC_ASCII_LEN];
 	struct hostapd_config *conf;
 
-	mac_to_ascii(mac_ascii, sa);
+	mactoa(mac_ascii, sa);
 
 	wpa_printf(MSG_DEBUG,"JJJ begin setup an ap"
 						" for station addr:" MACSTR "  JJJ", MAC2STR(sa));
@@ -572,7 +572,10 @@ static int hostapd_setup_bss_add(struct hostapd_iface *iface,const u8 *sa)
 	iface->interfaces->set_security_params(conf->bss);
 	*/
 	iface->bss[iface->num_bss - 1] = hostapd_alloc_bss_data(iface, conf,conf->bss);
+	iface->bss[iface->num_bss - 1]->driver = iface->bss[0]->driver;
+	/*
 	iface->bss[iface->num_bss - 1]->msg_ctx = iface->bss[iface->num_bss - 1];
+	*/
 	iface->bss[iface->num_bss - 1]->drv_priv = iface->bss[0]->drv_priv;
 	os_memcpy(iface->bss[iface->num_bss - 1]->own_addr, iface->bss[0]->own_addr, ETH_ALEN);
 	hostapd_setup_wpa(iface->bss[iface->num_bss - 1]);   /*hostapd_setup_bss*/
@@ -589,7 +592,7 @@ static int hostapd_setup_bss_add(struct hostapd_iface *iface,const u8 *sa)
 																	/*hostapd_setup_bss*/
 	if (iface->bss[iface->num_bss - 1]->radius == NULL) {
 			wpa_printf(MSG_ERROR, "JJJ RADIUS client initialization failed"
-						"in setup bss add JJJ");
+						"in setup_bss_add JJJ");
 			return -1;
 		}
 	wpa_printf(MSG_DEBUG,"JJJ num_bss: %d  JJJ", (int)iface->num_bss);
@@ -620,7 +623,7 @@ static struct hostapd_data * get_hapd_bssid(struct hostapd_iface *iface,
 		&& WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_PROBE_RESP)) /* probe response */
 			return iface->bss[0];					/*  don't setup for probe */
 
-	mac_to_ascii(mac_ascii, sa);
+	mactoa(mac_ascii, sa);
 	for (i = 0; i < iface->num_bss; i++) {
 		if (os_memcmp(mac_ascii, iface->bss[i]->conf->ssid.ssid, iface->bss[i]->conf->ssid.ssid_len) == 0)
 		{
@@ -628,14 +631,16 @@ static struct hostapd_data * get_hapd_bssid(struct hostapd_iface *iface,
 			return iface->bss[i];
 		}
 	}
-		/* new station ,and try to authentication,setup an ap for it*/
+		/* means it's new station,and if it tries to authentication,
+		 * setup an ap for it
+		 */
 	if (WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_MGMT
 		&& WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_AUTH)
 	{
 		if(hostapd_setup_bss_add(iface,sa))
 			return NULL;
 	}
-	return iface->bss[iface->num_bss - 1];		/* end here means  exception happened */
+	return iface->bss[iface->num_bss - 1];
 }
 
 static void hostapd_rx_from_unknown_sta(struct hostapd_data *hapd,
@@ -670,7 +675,7 @@ static void hostapd_mgmt_rx(struct hostapd_data *hapd, struct rx_mgmt *rx_mgmt)
 		/*
 		 * Drop frames to unknown BSSIDs except for Beacon frames which
 		 * could be used to update neighbor information.*/
-/*
+		/*
 		if (WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_MGMT &&
 		    WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_BEACON)
 			hapd = iface->bss[0];
