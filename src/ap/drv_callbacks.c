@@ -11,6 +11,7 @@
 #include "utils/common.h"
 #include "radius/radius.h"
 #include "radius/radius_client.h"
+#include "radius/radius_das.h"
 #include "drivers/driver.h"
 #include "common/ieee802_11_defs.h"
 #include "common/ieee802_11_common.h"
@@ -20,6 +21,7 @@
 #include "wnm_ap.h"
 #include "hostapd.h"
 #include "ieee802_11.h"
+#include "ieee802_11_auth.h"
 #include "sta_info.h"
 #include "accounting.h"
 #include "tkip_countermeasures.h"
@@ -30,9 +32,12 @@
 #include "ap_drv_ops.h"
 #include "ap_config.h"
 #include "hw_features.h"
-/* add,make mac turn to str */
+#include "authsrv.h"
+#include "iapp.h"
+#include "vlan_init.h"
+#include "beacon.h"
 
-
+extern int wpa_debug_level;
 int hostapd_notif_assoc(struct hostapd_data *hapd, const u8 *addr,
 			const u8 *req_ies, size_t req_ies_len, int reassoc)
 {
@@ -553,6 +558,8 @@ static int hostapd_setup_bss_add(struct hostapd_iface *iface,const u8 *sa)
 {
 	u8 mac_ascii[MAC_ASCII_LEN];
 	struct hostapd_config *conf;
+	struct hostapd_bss_config *iconf;
+	size_t i;
 
 	mactoa(mac_ascii, sa);
 
@@ -568,34 +575,117 @@ static int hostapd_setup_bss_add(struct hostapd_iface *iface,const u8 *sa)
 	}
 	conf->bss->ssid.ssid_len = MAC_ASCII_LEN;
 	os_memcpy(conf->bss->ssid.ssid, mac_ascii, MAC_ASCII_LEN);
-	/*
-	iface->interfaces->set_security_params(conf->bss);
-	*/
-	iface->bss[iface->num_bss - 1] = hostapd_alloc_bss_data(iface, conf,conf->bss);
-	iface->bss[iface->num_bss - 1]->driver = iface->bss[0]->driver;
+
+	//iface->interfaces->set_security_params(conf->bss);
+
+	i=iface->num_bss - 1;
+	iface->bss[i] = hostapd_alloc_bss_data(iface, conf,conf->bss);
+	iface->bss[i]->driver = iface->bss[0]->driver;
 	/*
 	iface->bss[iface->num_bss - 1]->msg_ctx = iface->bss[iface->num_bss - 1];
 	*/
-	iface->bss[iface->num_bss - 1]->drv_priv = iface->bss[0]->drv_priv;
-	os_memcpy(iface->bss[iface->num_bss - 1]->own_addr, iface->bss[0]->own_addr, ETH_ALEN);
-	hostapd_setup_wpa(iface->bss[iface->num_bss - 1]);   /*hostapd_setup_bss*/
-	if (iface->bss[iface->num_bss - 1]->wpa_auth)
-		wpa_init_keys(iface->bss[iface->num_bss - 1]->wpa_auth);      /*hostapd_setup_bss*/
+	iface->bss[i]->drv_priv = iface->bss[0]->drv_priv;
+	os_memcpy(iface->bss[i]->own_addr, iface->bss[0]->own_addr, ETH_ALEN);
 
-	if(hostapd_setup_wpa_psk(iface->bss[iface->num_bss - 1]->conf))   /*hostapd_setup_bss*/
-	{
-		wpa_printf(MSG_ERROR, "JJJ WPA-PSK setup failed in setup bss add JJJ");
+	iconf=iface->bss[i]->conf;
+
+	if (iconf->wmm_enabled < 0)
+		iconf->wmm_enabled = iface->bss[i]->iconf->ieee80211n;
+
+	if (hostapd_setup_wpa_psk(iconf)) {
+		wpa_printf(MSG_ERROR, "JJJ bss add, WPA-PSK setup failed.");
 		return -1;
 	}
-	iface->bss[iface->num_bss - 1]->radius = radius_client_init(iface->bss[iface->num_bss - 1],
-												iface->bss[iface->num_bss - 1]->conf->radius);
-																	/*hostapd_setup_bss*/
-	if (iface->bss[iface->num_bss - 1]->radius == NULL) {
-			wpa_printf(MSG_ERROR, "JJJ RADIUS client initialization failed"
-						"in setup_bss_add JJJ");
+
+	if (wpa_debug_level == MSG_MSGDUMP)
+		iconf->radius->msg_dumps = 1;
+#ifndef CONFIG_NO_RADIUS
+	iface->bss[i]->radius = radius_client_init(iface->bss[i], iconf->radius);
+	if (iface->bss[i]->radius == NULL) {
+		wpa_printf(MSG_ERROR, "JJJ bss add, RADIUS client initialization failed.");
+		return -1;
+	}
+
+	if (iface->bss[i]->conf->radius_das_port) {
+		struct radius_das_conf das_conf;
+		os_memset(&das_conf, 0, sizeof(das_conf));
+		das_conf.port = iface->bss[i]->conf->radius_das_port;
+		das_conf.shared_secret = iface->bss[i]->conf->radius_das_shared_secret;
+		das_conf.shared_secret_len =
+				iface->bss[i]->conf->radius_das_shared_secret_len;
+		das_conf.client_addr = &iface->bss[i]->conf->radius_das_client_addr;
+		das_conf.time_window = iface->bss[i]->conf->radius_das_time_window;
+		das_conf.require_event_timestamp =
+				iface->bss[i]->conf->radius_das_require_event_timestamp;
+		das_conf.ctx = iface->bss[i];
+		das_conf.disconnect = hostapd_das_disconnect;
+		iface->bss[i]->radius_das = radius_das_init(&das_conf);
+		if (iface->bss[i]->radius_das == NULL) {
+			wpa_printf(MSG_ERROR, "JJJ bss add, RADIUS DAS initialization "
+					   "failed.");
 			return -1;
 		}
-	wpa_printf(MSG_DEBUG,"JJJ num_bss: %d  JJJ", (int)iface->num_bss);
+	}
+#endif /* CONFIG_NO_RADIUS */
+
+
+	if (hostapd_acl_init(iface->bss[i])) {
+		wpa_printf(MSG_ERROR, "JJJ bss add, ACL initialization failed.");
+		return -1;
+	}
+	if (hostapd_init_wps(iface->bss[i], iconf))
+		return -1;
+
+	if (authsrv_init(iface->bss[i]) < 0)
+		return -1;
+
+	if (ieee802_1x_init(iface->bss[i])) {
+		wpa_printf(MSG_ERROR, "JJJ bss add,IEEE 802.1X initialization failed.");
+		return -1;
+	}
+
+	if (iface->bss[i]->conf->wpa && hostapd_setup_wpa(iface->bss[i]))
+		return -1;
+
+	if (accounting_init(iface->bss[i])) {
+		wpa_printf(MSG_ERROR, "JJJ bss add,Accounting initialization failed.");
+		return -1;
+	}
+
+	if (iface->bss[i]->conf->ieee802_11f &&
+	    (iface->bss[i]->iapp = iapp_init(iface->bss[i],
+	    		iface->bss[i]->conf->iapp_iface)) == NULL) {
+		wpa_printf(MSG_ERROR, "JJJ bss add,IEEE 802.11F (IAPP) initialization "
+			   "failed.");
+		return -1;
+	}
+
+#ifdef CONFIG_INTERWORKING
+	if (gas_serv_init(hapd)) {
+		wpa_printf(MSG_ERROR, "GAS server initialization failed");
+		return -1;
+	}
+#endif /* CONFIG_INTERWORKING */
+
+	if (iface->bss[i]->iface->interfaces &&
+		iface->bss[i]->iface->interfaces->ctrl_iface_init &&
+		iface->bss[i]->iface->interfaces->ctrl_iface_init(iface->bss[i])) {
+		wpa_printf(MSG_ERROR, "Failed to setup control interface");
+		return -1;
+	}
+
+	if (!hostapd_drv_none(iface->bss[i]) && vlan_init(iface->bss[i])) {
+		wpa_printf(MSG_ERROR, "VLAN initialization failed.");
+		return -1;
+	}
+
+	if (iface->bss[i]->wpa_auth && wpa_init_keys(iface->bss[i]->wpa_auth) < 0)
+		return -1;
+
+	if (iface->bss[i]->driver && iface->bss[i]->driver->set_operstate)
+		iface->bss[i]->driver->set_operstate(iface->bss[i]->drv_priv, 1);
+
+	wpa_printf(MSG_DEBUG,"JJJ afetr set up bss add ,num_bss: %d  JJJ", (int)iface->num_bss);
 	return 0;
 
 }
@@ -612,12 +702,11 @@ static struct hostapd_data * get_hapd_bssid(struct hostapd_iface *iface,
 	    bssid[3] == 0xff && bssid[4] == 0xff && bssid[5] == 0xff)
 		return HAPD_BROADCAST;
 
-		/* all bssid is the same,equal to mac. */
+		/* all bssid are the same,equal to mac. */
 	if (os_memcmp(bssid, iface->bss[0]->own_addr, ETH_ALEN) != 0)
 		return NULL;
 
-	if (WLAN_FC_GET_TYPE(fc) == 3   /* unknow station */
-		|| (WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_MGMT
+	if ( (WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_MGMT
 		&& WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_PROBE_REQ) /* probe request */
 		|| (WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_MGMT
 		&& WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_PROBE_RESP)) /* probe response */
@@ -628,6 +717,7 @@ static struct hostapd_data * get_hapd_bssid(struct hostapd_iface *iface,
 		if (os_memcmp(mac_ascii, iface->bss[i]->conf->ssid.ssid, iface->bss[i]->conf->ssid.ssid_len) == 0)
 		{
 			wpa_printf(MSG_DEBUG,"JJJ find sta : " MACSTR " JJJ", MAC2STR(sa));
+			wpa_printf(MSG_DEBUG,"JJJ return iface->bss[%d] JJJ", (int)i);
 			return iface->bss[i];
 		}
 	}
@@ -640,6 +730,7 @@ static struct hostapd_data * get_hapd_bssid(struct hostapd_iface *iface,
 		if(hostapd_setup_bss_add(iface,sa))
 			return NULL;
 	}
+
 	return iface->bss[iface->num_bss - 1];
 }
 
