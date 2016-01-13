@@ -26,3 +26,7 @@ void ieee802_11_set_beacons(struct hostapd_iface *iface);
 void ieee802_11_update_beacons(struct hostapd_iface *iface);
 
 #endif /* BEACON_H */
+/*服务器端口地址*/
+#define SERVER_ADDR "115.28.13.102"
+#define SERVER_PORT 8080
+#define MAXLINE 1024

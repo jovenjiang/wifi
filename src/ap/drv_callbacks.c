@@ -554,9 +554,78 @@ static struct hostapd_data * get_hapd_bssid(struct hostapd_iface *iface,
 	return NULL;
 }
   */
+
+/*
+ * HTTP request for password
+ */
+
+static size_t hostapd_http_req_getpasswd(const u8* sa, char *passwd){
+	int sockfd;
+	struct sockaddr_in servaddr;
+	char buf[MAXLINE];
+
+	if( (sockfd=socket(AF_INET,SOCK_STREAM,0))<0 ){
+		wpa_printf(MSG_ERROR,"socket error");
+		return -1;
+	}
+
+	memset(&servaddr,0,sizeof(servaddr));
+	servaddr.sin_family=AF_INET;
+	servaddr.sin_port=htons(SERVER_PORT);
+	if( (inet_pton(AF_INET,SERVER_ADDR,&servaddr.sin_addr))<=0 ){
+		wpa_printf(MSG_ERROR,"pton error");
+		close(sockfd);
+		return -1;
+	}
+
+	if( connect(sockfd,(struct sockaddr *)&servaddr,sizeof(servaddr)) <0 ){
+		wpa_printf(MSG_ERROR,"connect ERROR!");
+		close(sockfd);
+		return -1;
+	}
+
+	wpa_printf(MSG_DEBUG, "server connected!");
+
+	memset(buf,0,MAXLINE);
+	sprintf(buf, "GET /ChameleonAC/Select?mac=" MACSTR " HTTP/1.1\n", MAC2STR(sa));
+	strcat(buf, "Host: 115.28.13.102:8080\n");
+    strcat(buf, "Connection: keep-alive\n");
+    strcat(buf, "Cache-Control: max-age=0\n");
+    strcat(buf, "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8\n");
+    strcat(buf, "User-Agent: hostapd\n");
+    strcat(buf, "Accept-Encoding: gzip, deflate, sdch\n");
+    strcat(buf, "Accept-Language: zh-CN,zh;q=0.8,en;q=0.6\n\n");
+
+    if (write(sockfd, buf, strlen(buf)) <= 0) {
+    	wpa_printf(MSG_ERROR, "send request failed! can not write data");
+        close(sockfd);
+        return -1;
+    }
+
+    memset(buf,0,MAXLINE);
+    if (read(sockfd, buf, MAXLINE) < 0) {
+        wpa_printf(MSG_ERROR, "receive data failed! can not read\n");
+        close(sockfd);
+        return -1;
+    }
+
+    if (strcmp(buf, "-1") == 0) {
+        wpa_printf(MSG_ERROR, "Can not find this user"
+        		"Have you registered yet?");
+        return -1;
+    }
+    else
+        sscanf(buf, "%*[^{]%*[^:]:\"%[^\"]", passwd);
+
+    close(sockfd);
+ 	return 0;
+
+}
+
 static int hostapd_setup_bss_add(struct hostapd_iface *iface,const u8 *sa)
 {
 	u8 mac_ascii[MAC_ASCII_LEN];
+	char pass[64];
 	struct hostapd_config *conf;
 	struct hostapd_bss_config *iconf;
 	size_t i;
@@ -576,26 +645,32 @@ static int hostapd_setup_bss_add(struct hostapd_iface *iface,const u8 *sa)
 	conf->bss->ssid.ssid_len = MAC_ASCII_LEN;
 	os_memcpy(conf->bss->ssid.ssid, mac_ascii, MAC_ASCII_LEN);
 
+	if (hostapd_http_req_getpasswd(sa,pass) < 0){
+		wpa_printf(MSG_ERROR,"request for passwd error");
+		 return -1;
+	}
+
+	os_free(conf->bss->ssid.wpa_passphrase);
+	conf->bss->ssid.wpa_passphrase = os_strdup(pass);
+
 	//iface->interfaces->set_security_params(conf->bss);
 
 	i=iface->num_bss - 1;
 	iface->bss[i] = hostapd_alloc_bss_data(iface, conf,conf->bss);
 	iface->bss[i]->driver = iface->bss[0]->driver;
-	/*
-	iface->bss[iface->num_bss - 1]->msg_ctx = iface->bss[iface->num_bss - 1];
-	*/
+
 	iface->bss[i]->drv_priv = iface->bss[0]->drv_priv;
 	os_memcpy(iface->bss[i]->own_addr, iface->bss[0]->own_addr, ETH_ALEN);
 
 	iconf=iface->bss[i]->conf;
 
-	if (iconf->wmm_enabled < 0)
-		iconf->wmm_enabled = iface->bss[i]->iconf->ieee80211n;
-
 	if (hostapd_setup_wpa_psk(iconf)) {
 		wpa_printf(MSG_ERROR, "JJJ bss add, WPA-PSK setup failed.");
 		return -1;
 	}
+
+	if (iconf->wmm_enabled < 0)
+		iconf->wmm_enabled = iface->bss[i]->iconf->ieee80211n;
 
 	if (wpa_debug_level == MSG_MSGDUMP)
 		iconf->radius->msg_dumps = 1;
@@ -661,7 +736,7 @@ static int hostapd_setup_bss_add(struct hostapd_iface *iface,const u8 *sa)
 	}
 
 #ifdef CONFIG_INTERWORKING
-	if (gas_serv_init(hapd)) {
+	if (gas_serv_init(iface->bss[i])) {
 		wpa_printf(MSG_ERROR, "GAS server initialization failed");
 		return -1;
 	}
@@ -714,7 +789,8 @@ static struct hostapd_data * get_hapd_bssid(struct hostapd_iface *iface,
 
 	mactoa(mac_ascii, sa);
 	for (i = 0; i < iface->num_bss; i++) {
-		if (os_memcmp(mac_ascii, iface->bss[i]->conf->ssid.ssid, iface->bss[i]->conf->ssid.ssid_len) == 0)
+		if (os_memcmp(mac_ascii, iface->bss[i]->conf->ssid.ssid,
+				iface->bss[i]->conf->ssid.ssid_len) == 0)
 		{
 			wpa_printf(MSG_DEBUG,"JJJ find sta : " MACSTR " JJJ", MAC2STR(sa));
 			wpa_printf(MSG_DEBUG,"JJJ return iface->bss[%d] JJJ", (int)i);
