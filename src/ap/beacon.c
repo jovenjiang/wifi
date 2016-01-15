@@ -513,7 +513,6 @@ void handle_probe_req(struct hostapd_data *hapd,
 				      &resp_len);
 	if (resp == NULL)
 		return;
-
 	/*
 	 * If this is a broadcast probe request, apply no ack policy to avoid
 	 * excessive retries.

@@ -569,7 +569,7 @@ static size_t hostapd_http_req_getpasswd(const u8* sa, char *passwd){
 		return -1;
 	}
 
-	memset(&servaddr,0,sizeof(servaddr));
+	os_memset(&servaddr,0,sizeof(servaddr));
 	servaddr.sin_family=AF_INET;
 	servaddr.sin_port=htons(SERVER_PORT);
 	if( (inet_pton(AF_INET,SERVER_ADDR,&servaddr.sin_addr))<=0 ){
@@ -584,9 +584,9 @@ static size_t hostapd_http_req_getpasswd(const u8* sa, char *passwd){
 		return -1;
 	}
 
-	wpa_printf(MSG_DEBUG, "server connected!");
+	wpa_printf(MSG_DEBUG, "JJJ server connected!");
 
-	memset(buf,0,MAXLINE);
+	os_memset(buf,0,MAXLINE);
 	sprintf(buf, "GET /ChameleonAC/Select?mac=" MACSTR " HTTP/1.1\n", MAC2STR(sa));
 	strcat(buf, "Host: 115.28.13.102:8080\n");
     strcat(buf, "Connection: keep-alive\n");
@@ -602,7 +602,7 @@ static size_t hostapd_http_req_getpasswd(const u8* sa, char *passwd){
         return -1;
     }
 
-    memset(buf,0,MAXLINE);
+    os_memset(buf,0,MAXLINE);
     if (read(sockfd, buf, MAXLINE) < 0) {
         wpa_printf(MSG_ERROR, "receive data failed! can not read\n");
         close(sockfd);
@@ -614,8 +614,11 @@ static size_t hostapd_http_req_getpasswd(const u8* sa, char *passwd){
         		"Have you registered yet?");
         return -1;
     }
-    else
-        sscanf(buf, "%*[^{]%*[^:]:\"%[^\"]", passwd);
+    else {
+    	sscanf(buf, "%*[^{]%*[^:]:\"%[^\"]", passwd);
+    	if(strcmp(passwd,"\0") != 0 )
+    		wpa_printf(MSG_DEBUG,"JJJ get passwd success!\n");
+    }
 
     close(sockfd);
  	return 0;
@@ -634,9 +637,7 @@ static int hostapd_setup_bss_add(struct hostapd_iface *iface,const u8 *sa)
 
 	wpa_printf(MSG_DEBUG,"JJJ begin setup an ap"
 						" for station addr:" MACSTR "  JJJ", MAC2STR(sa));
-	iface->num_bss++;
-	iface->bss = (struct hostapd_data **)realloc(iface->bss,
-					iface->num_bss * sizeof(struct hostapd_data *));
+
 	conf = iface->interfaces->config_read_cb(iface->config_fname);
 	if(conf==NULL){
 		wpa_printf(MSG_ERROR, "JJJ configuration failed in setup bss add JJJ");
@@ -653,7 +654,11 @@ static int hostapd_setup_bss_add(struct hostapd_iface *iface,const u8 *sa)
 	os_free(conf->bss->ssid.wpa_passphrase);
 	conf->bss->ssid.wpa_passphrase = os_strdup(pass);
 
-	//iface->interfaces->set_security_params(conf->bss);
+	iface->interfaces->set_security_params(conf->bss);
+
+	iface->num_bss++;
+	iface->bss = (struct hostapd_data **)realloc(iface->bss,
+						iface->num_bss * sizeof(struct hostapd_data *));
 
 	i=iface->num_bss - 1;
 	iface->bss[i] = hostapd_alloc_bss_data(iface, conf,conf->bss);
@@ -781,11 +786,20 @@ static struct hostapd_data * get_hapd_bssid(struct hostapd_iface *iface,
 	if (os_memcmp(bssid, iface->bss[0]->own_addr, ETH_ALEN) != 0)
 		return NULL;
 
-	if ( (WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_MGMT
-		&& WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_PROBE_REQ) /* probe request */
-		|| (WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_MGMT
-		&& WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_PROBE_RESP)) /* probe response */
-			return iface->bss[0];					/*  don't setup for probe */
+	if ( WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_MGMT
+		&& WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_PROBE_REQ){	/* probe request */
+
+		wpa_printf(MSG_DEBUG,"JJJ probe request, don't setup ap\n");
+		return iface->bss[0];					/*  don't setup for probe */
+	}
+
+
+	if ( WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_MGMT
+		&& WLAN_FC_GET_STYPE(fc) == WLAN_FC_STYPE_PROBE_RESP) /* probe response */
+	{
+		wpa_printf(MSG_DEBUG,"JJJ probe response, don't setup ap\n");
+		return iface->bss[0];					/*  don't setup for probe */
+	}
 
 	mactoa(mac_ascii, sa);
 	for (i = 0; i < iface->num_bss; i++) {
@@ -793,11 +807,11 @@ static struct hostapd_data * get_hapd_bssid(struct hostapd_iface *iface,
 				iface->bss[i]->conf->ssid.ssid_len) == 0)
 		{
 			wpa_printf(MSG_DEBUG,"JJJ find sta : " MACSTR " JJJ", MAC2STR(sa));
-			wpa_printf(MSG_DEBUG,"JJJ return iface->bss[%d] JJJ", (int)i);
+			wpa_printf(MSG_DEBUG,"JJJ return iface->bss[%d] JJJ\n", (int)i);
 			return iface->bss[i];
 		}
 	}
-		/* means it's new station,and if it tries to authentication,
+		/* means it's a new station,and if it tries to authentication,
 		 * setup an ap for it
 		 */
 	if (WLAN_FC_GET_TYPE(fc) == WLAN_FC_TYPE_MGMT
